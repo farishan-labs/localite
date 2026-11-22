@@ -1,0 +1,17 @@
+{
+  "name": "localite",
+  "version": "0.1.0",
+  "description": "Deploy the current directory as a local HTTPS site (*.local).",
+  "type": "module",
+  "bin": {
+    "localite": "./bin/localite.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/farishan-labs/localite.git"
+  }
+}
