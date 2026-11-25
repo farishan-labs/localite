@@ -2,7 +2,9 @@
 import { execSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync, readFileSync, rmSync, unlinkSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
-import { homedir } from "node:os";
+import { homedir, platform } from "node:os";
+
+const IS_MAC = platform() === "darwin";
 
 const HOME = homedir();
 const DATA_DIR = join(HOME, ".local", "share", "localite");
@@ -113,6 +115,15 @@ WantedBy=default.target
 }
 
 function deploy(nameOverride) {
+  if (IS_MAC) {
+    if (!has("valet")) throw new Error("valet not found; install Laravel Valet first (https://laravel.com/docs/valet)");
+    const name = sanitize(nameOverride || siteNameFromCwd());
+    run(`valet link ${name}`);
+    try { run(`valet secure ${name}`); } catch (e) { /* already secured or failed; continue */ }
+    console.log(`\\n✓ Deployed via Valet`);
+    console.log(`  → https://${name}.test/\\n`);
+    return;
+  }
   ensureDirs();
   for (const cmd of ["nginx", "mkcert", "avahi-publish-address", "systemctl"]) {
     if (!has(cmd === "avahi-publish-address" ? "avahi-publish-address" : cmd)) {
@@ -162,6 +173,16 @@ function deploy(nameOverride) {
 }
 
 function undeploy(nameOverride) {
+  if (IS_MAC) {
+    if (!has("valet")) throw new Error("valet not found; install Laravel Valet first");
+    const reg = {}; // valet manages its own state
+    let name = nameOverride ? sanitize(nameOverride) : null;
+    if (!name) name = siteNameFromCwd();
+    try { run(`valet unlink ${name}`); } catch {}
+    try { run(`valet unsecure ${name}`); } catch {}
+    console.log(`\\n✓ Undeployed ${name}.test\\n`);
+    return;
+  }
   ensureDirs();
   const reg = readRegistry();
   // find by cwd if possible
@@ -199,6 +220,11 @@ function undeploy(nameOverride) {
 }
 
 function list() {
+  if (IS_MAC) {
+    if (!has("valet")) throw new Error("valet not found; install Laravel Valet first");
+    run("valet links", { stdio: "inherit" });
+    return;
+  }
   const reg = readRegistry();
   const entries = Object.entries(reg);
   if (entries.length === 0) {
@@ -226,7 +252,9 @@ function main() {
       list();
     } else if (cmd === "help" || cmd === "--help" || cmd === "-h") {
       console.log(`Usage:
-  localite [--name <name>]        Deploy current directory to https://<name>.local
+  localite [--name <name>]        Deploy current directory
+                                 (Linux: https://<name>.local via nginx/avahi)
+                                 (macOS: https://<name>.test via Laravel Valet)
   localite undeploy [--name <name>]  Undeploy
   localite list                  List deployments
 `);
