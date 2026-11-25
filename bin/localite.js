@@ -69,8 +69,40 @@ function writeRegistry(reg) {
   writeFileSync(REGISTRY_FILE, JSON.stringify(reg, null, 2) + "\n");
 }
 
-function nginxConfig(name, rootDir, certDir) {
+function nginxConfig(name, rootDir, certDir, proxyPort = null) {
   const domain = domainFor(name);
+  const upstream = proxyPort ? `http://127.0.0.1:${proxyPort}` : null;
+  if (proxyPort) {
+    return `server {
+    listen 80;
+    server_name ${domain};
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name ${domain};
+
+    ssl_certificate ${certDir}/cert.pem;
+    ssl_certificate_key ${certDir}/key.pem;
+
+    location / {
+        proxy_pass ${upstream};
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 86400;
+    }
+
+    access_log off;
+    error_log ${LOG_DIR}/${domain}-error.log;
+}
+`;
+  }
   return `server {
     listen 80;
     server_name ${domain};
@@ -171,14 +203,14 @@ function macReloadNginx() {
 
 // ---------- commands ----------
 
-function deploy(nameOverride) {
+function deploy(nameOverride, proxyPort = null) {
   if (IS_MAC) {
     if (!has("nginx")) throw new Error("nginx not found; install with: brew install nginx");
     if (!has("mkcert")) throw new Error("mkcert not found; install with: brew install mkcert nss");
     ensureDirs();
     const name = sanitize(nameOverride || siteNameFromCwd());
     const domain = domainFor(name);
-    const rootDir = resolve(process.cwd());
+    const rootDir = proxyPort ? null : resolve(process.cwd());
     const certDir = join(CERTS_DIR, domain);
     mkdirSync(certDir, { recursive: true });
 
@@ -192,19 +224,20 @@ function deploy(nameOverride) {
     }
 
     const confPath = join(NGINX_DIR, domain);
-    writeFileSync(confPath, nginxConfig(name, rootDir, certDir));
+    writeFileSync(confPath, nginxConfig(name, rootDir, certDir, proxyPort));
 
     console.log("Updating /etc/hosts...");
     macEnsureHostsEntry(domain);
 
     const reg = readRegistry();
-    reg[name] = { domain, path: rootDir, deployedAt: new Date().toISOString() };
+    reg[name] = { domain, path: rootDir, proxyPort: proxyPort ? Number(proxyPort) : null, deployedAt: new Date().toISOString() };
     writeRegistry(reg);
 
     console.log("Reloading nginx...");
     macReloadNginx();
 
-    console.log(`\n✓ Deployed ${rootDir}`);
+    const label = proxyPort ? `proxy -> 127.0.0.1:${proxyPort}` : rootDir;
+    console.log(`\n✓ Deployed ${label}`);
     console.log(`  → https://${domain}/\n`);
     return;
   }
@@ -218,7 +251,7 @@ function deploy(nameOverride) {
 
   const name = sanitize(nameOverride || siteNameFromCwd());
   const domain = domainFor(name);
-  const rootDir = resolve(process.cwd());
+  const rootDir = proxyPort ? null : resolve(process.cwd());
   const certDir = join(CERTS_DIR, domain);
   mkdirSync(certDir, { recursive: true });
 
@@ -231,7 +264,7 @@ function deploy(nameOverride) {
 
   // nginx config
   const confPath = join(NGINX_DIR, domain);
-  writeFileSync(confPath, nginxConfig(name, rootDir, certDir));
+  writeFileSync(confPath, nginxConfig(name, rootDir, certDir, proxyPort));
 
   // avahi service
   const svc = avahiServiceName(name);
@@ -246,10 +279,11 @@ function deploy(nameOverride) {
 
   // registry
   const reg = readRegistry();
-  reg[name] = { domain, path: rootDir, deployedAt: new Date().toISOString() };
+  reg[name] = { domain, path: rootDir, proxyPort: proxyPort ? Number(proxyPort) : null, deployedAt: new Date().toISOString() };
   writeRegistry(reg);
 
-  console.log(`\n✓ Deployed ${rootDir}`);
+  const label = proxyPort ? `proxy -> 127.0.0.1:${proxyPort}` : rootDir;
+  console.log(`\n✓ Deployed ${label}`);
   console.log(`  → https://${domain}/\n`);
 }
 
@@ -323,31 +357,41 @@ function list() {
     return;
   }
   for (const [name, info] of entries) {
-    console.log(`${name}.local  ${info.path}`);
+    const extra = info.proxyPort ? `  -> 127.0.0.1:${info.proxyPort}` : `  ${info.path}`;
+    console.log(`${name}.local${extra}`);
   }
 }
 
 function main() {
   const args = process.argv.slice(2);
-  const cmd = args[0];
-  const rest = args.slice(1);
+  let cmd = args[0];
+  let rest = args.slice(1);
+  if (cmd && cmd.startsWith("-")) {
+    rest = args; // flags first => deploy
+    cmd = null;
+  }
   const nameFlagIdx = rest.indexOf("--name");
   const nameOverride = nameFlagIdx >= 0 ? rest[nameFlagIdx + 1] : null;
+  const proxyFlagIdx = rest.indexOf("--proxy");
+  const proxyPort = proxyFlagIdx >= 0 ? rest[proxyFlagIdx + 1] : null;
 
   try {
     if (!cmd || cmd === "deploy") {
-      deploy(nameOverride);
+      deploy(nameOverride, proxyPort);
     } else if (cmd === "undeploy") {
       undeploy(nameOverride);
     } else if (cmd === "list") {
       list();
     } else if (cmd === "help" || cmd === "--help" || cmd === "-h") {
       console.log(`Usage:
-  localite [--name <name>]        Deploy current directory
+  localite [--name <name>] [--proxy <port>]   Deploy current directory (or proxy a port)
                                   (Linux: https://<name>.local via nginx/avahi)
                                   (macOS: https://<name>.local via nginx/mkcert + /etc/hosts)
-  localite undeploy [--name <name>]  Undeploy
-  localite list                  List deployments
+  localite undeploy [--name <name>]              Undeploy
+  localite list                                  List deployments
+  Examples:
+    localite --name me
+    localite --name cockpit --proxy 7777
 `);
     } else {
       console.error(`Unknown command: ${cmd}`);
