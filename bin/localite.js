@@ -74,13 +74,13 @@ function nginxConfig(name, rootDir, certDir, proxyPort = null) {
   const upstream = proxyPort ? `http://127.0.0.1:${proxyPort}` : null;
   if (proxyPort) {
     return `server {
-    listen 80;
+    listen ${IS_MAC ? "127.0.0.1:80" : "80"};
     server_name ${domain};
     return 301 https://$host$request_uri;
 }
 
 server {
-    listen 443 ssl http2;
+    listen ${IS_MAC ? "127.0.0.1:443 ssl" : "443 ssl"};\n    http2 on;
     server_name ${domain};
 
     ssl_certificate ${certDir}/cert.pem;
@@ -104,13 +104,13 @@ server {
 `;
   }
   return `server {
-    listen 80;
+    listen ${IS_MAC ? "127.0.0.1:80" : "80"};
     server_name ${domain};
     return 301 https://$host$request_uri;
 }
 
 server {
-    listen 443 ssl http2;
+    listen ${IS_MAC ? "127.0.0.1:443 ssl" : "443 ssl"};\n    http2 on;
     server_name ${domain};
 
     root ${rootDir};
