@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { execSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync, readFileSync, rmSync, unlinkSync } from "node:fs";
+import { execSync } from "node:child_process";
+import { existsSync, mkdirSync, writeFileSync, readFileSync, unlinkSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { homedir, platform } from "node:os";
 
@@ -10,13 +10,19 @@ const HOME = homedir();
 const DATA_DIR = join(HOME, ".local", "share", "localite");
 const CERTS_DIR = join(DATA_DIR, "certs");
 const REGISTRY_FILE = join(DATA_DIR, "registry.json");
-const NGINX_DIR = join(HOME, ".valet", "Nginx");
+const NGINX_DIR = IS_MAC
+  ? join(HOME, ".config", "valet", "Nginx")
+  : join(HOME, ".valet", "Nginx");
+const LOG_DIR = IS_MAC
+  ? join(HOME, ".config", "valet", "Log")
+  : join(HOME, ".valet", "Log");
 const SYSTEMD_USER_DIR = join(HOME, ".config", "systemd", "user");
 
 function ensureDirs() {
   mkdirSync(DATA_DIR, { recursive: true });
   mkdirSync(CERTS_DIR, { recursive: true });
   mkdirSync(NGINX_DIR, { recursive: true });
+  mkdirSync(LOG_DIR, { recursive: true });
   mkdirSync(SYSTEMD_USER_DIR, { recursive: true });
 }
 
@@ -88,7 +94,7 @@ server {
     autoindex on;
 
     access_log off;
-    error_log ${HOME}/.valet/Log/${domain}-error.log;
+    error_log ${LOG_DIR}/${domain}-error.log;
 }
 `;
 }
@@ -114,22 +120,97 @@ WantedBy=default.target
 `;
 }
 
-function deploy(nameOverride) {
-  if (IS_MAC) {
-    if (!has("valet")) throw new Error("valet not found; install Laravel Valet first (https://laravel.com/docs/valet)");
-    const name = sanitize(nameOverride || siteNameFromCwd());
-    run(`valet link ${name}`);
-    try { run(`valet secure ${name}`); } catch (e) { /* already secured or failed; continue */ }
-    console.log(`\\n✓ Deployed via Valet`);
-    console.log(`  → https://${name}.test/\\n`);
-    return;
+// ---------- macOS helpers ----------
+
+function macEnsureHostsEntry(domain) {
+  let content = "";
+  try { content = readFileSync("/etc/hosts", "utf8"); } catch {}
+  const already = content.split("\n").some((l) => l.split(/\s+/).includes(domain));
+  if (already) return;
+  console.log(`  adding ${domain} to /etc/hosts (requires sudo)...`);
+  try {
+    run(`sh -c 'echo "127.0.0.1 ${domain}" | sudo tee -a /etc/hosts'`, { stdio: "inherit" });
+  } catch (e) {
+    console.error("  ! Could not update /etc/hosts automatically.");
+    console.error(`    Run manually: echo "127.0.0.1 ${domain}" | sudo tee -a /etc/hosts`);
   }
-  ensureDirs();
-  for (const cmd of ["nginx", "mkcert", "avahi-publish-address", "systemctl"]) {
-    if (!has(cmd === "avahi-publish-address" ? "avahi-publish-address" : cmd)) {
-      // avahi-publish-address is part of avahi-utils; check binary
+}
+
+function macRemoveHostsEntry(domain) {
+  try {
+    run(`sudo sed -i '' '/[[:space:]]${domain}\\([[:space:]]\\|$/d' /etc/hosts`, { stdio: "inherit" });
+  } catch (e) {
+    console.error("  ! Could not remove /etc/hosts entry automatically.");
+    console.error(`    Run manually: sudo sed -i '' '/ ${domain}/d' /etc/hosts`);
+  }
+}
+
+function macEnsureMkcertCA() {
+  if (!has("mkcert")) throw new Error("mkcert not found; install with: brew install mkcert nss");
+  let caroot;
+  try { caroot = run("mkcert -CAROOT").trim(); } catch { caroot = join(HOME, ".local", "share", "mkcert"); }
+  const caCert = join(caroot, "rootCA.pem");
+  if (!existsSync(caCert)) {
+    console.log("  installing mkcert local CA (may prompt for password)...");
+    try { run("mkcert -install", { stdio: "inherit" }); }
+    catch (e) {
+      console.error("  ! mkcert -install failed. Run manually: mkcert -install");
     }
   }
+}
+
+function macReloadNginx() {
+  try { run("sudo nginx -t", { stdio: "inherit" }); }
+  catch (e) { console.error("  nginx config test failed; see output above"); }
+  try { run("sudo nginx -s reload", { stdio: "inherit" }); }
+  catch (e) {
+    try { run("sudo brew services restart nginx", { stdio: "inherit" }); }
+    catch (e2) { console.error("  ! Could not reload nginx. Run: sudo nginx -s reload"); }
+  }
+}
+
+// ---------- commands ----------
+
+function deploy(nameOverride) {
+  if (IS_MAC) {
+    if (!has("nginx")) throw new Error("nginx not found; install with: brew install nginx");
+    if (!has("mkcert")) throw new Error("mkcert not found; install with: brew install mkcert nss");
+    ensureDirs();
+    const name = sanitize(nameOverride || siteNameFromCwd());
+    const domain = domainFor(name);
+    const rootDir = resolve(process.cwd());
+    const certDir = join(CERTS_DIR, domain);
+    mkdirSync(certDir, { recursive: true });
+
+    console.log("Ensuring mkcert CA is installed...");
+    macEnsureMkcertCA();
+
+    const certFile = join(certDir, "cert.pem");
+    const keyFile = join(certDir, "key.pem");
+    if (!existsSync(certFile) || !existsSync(keyFile)) {
+      run(`mkcert -cert-file ${certFile} -key-file ${keyFile} ${domain} localhost 127.0.0.1 ::1`);
+    }
+
+    const confPath = join(NGINX_DIR, domain);
+    writeFileSync(confPath, nginxConfig(name, rootDir, certDir));
+
+    console.log("Updating /etc/hosts...");
+    macEnsureHostsEntry(domain);
+
+    const reg = readRegistry();
+    reg[name] = { domain, path: rootDir, deployedAt: new Date().toISOString() };
+    writeRegistry(reg);
+
+    console.log("Reloading nginx...");
+    macReloadNginx();
+
+    console.log(`\n✓ Deployed ${rootDir}`);
+    console.log(`  → https://${domain}/\n`);
+    return;
+  }
+
+  // Linux
+  ensureDirs();
   if (!has("nginx")) throw new Error("nginx not found");
   if (!has("mkcert")) throw new Error("mkcert not found");
   if (!has("avahi-publish-address")) throw new Error("avahi-publish-address not found (install avahi-utils)");
@@ -174,22 +255,40 @@ function deploy(nameOverride) {
 
 function undeploy(nameOverride) {
   if (IS_MAC) {
-    if (!has("valet")) throw new Error("valet not found; install Laravel Valet first");
-    const reg = {}; // valet manages its own state
+    if (!has("nginx")) throw new Error("nginx not found");
+    ensureDirs();
+    const reg = readRegistry();
     let name = nameOverride ? sanitize(nameOverride) : null;
+    if (!name) {
+      const cwd = resolve(process.cwd());
+      for (const [n, info] of Object.entries(reg)) {
+        if (info.path === cwd) { name = n; break; }
+      }
+    }
     if (!name) name = siteNameFromCwd();
-    try { run(`valet unlink ${name}`); } catch {}
-    try { run(`valet unsecure ${name}`); } catch {}
-    console.log(`\\n✓ Undeployed ${name}.test\\n`);
+
+    const domain = domainFor(name);
+
+    const confPath = join(NGINX_DIR, domain);
+    if (existsSync(confPath)) unlinkSync(confPath);
+
+    macRemoveHostsEntry(domain);
+
+    if (reg[name]) delete reg[name];
+    writeRegistry(reg);
+
+    console.log("Reloading nginx...");
+    try { macReloadNginx(); } catch {}
+
+    console.log(`\n✓ Undeployed ${domain}\n`);
     return;
   }
+
   ensureDirs();
   const reg = readRegistry();
-  // find by cwd if possible
   const cwd = resolve(process.cwd());
   let name = nameOverride ? sanitize(nameOverride) : null;
   if (!name) {
-    // find registry entry whose path == cwd
     for (const [n, info] of Object.entries(reg)) {
       if (info.path === cwd) { name = n; break; }
     }
@@ -198,11 +297,9 @@ function undeploy(nameOverride) {
 
   const domain = domainFor(name);
 
-  // nginx config
   const confPath = join(NGINX_DIR, domain);
   if (existsSync(confPath)) unlinkSync(confPath);
 
-  // avahi service
   const svc = avahiServiceName(name);
   const svcPath = join(SYSTEMD_USER_DIR, svc);
   try { run(`systemctl --user stop ${svc}`); } catch {}
@@ -210,7 +307,6 @@ function undeploy(nameOverride) {
   if (existsSync(svcPath)) unlinkSync(svcPath);
   try { run("systemctl --user daemon-reload"); } catch {}
 
-  // registry
   if (reg[name]) delete reg[name];
   writeRegistry(reg);
 
@@ -220,11 +316,6 @@ function undeploy(nameOverride) {
 }
 
 function list() {
-  if (IS_MAC) {
-    if (!has("valet")) throw new Error("valet not found; install Laravel Valet first");
-    run("valet links", { stdio: "inherit" });
-    return;
-  }
   const reg = readRegistry();
   const entries = Object.entries(reg);
   if (entries.length === 0) {
@@ -253,8 +344,8 @@ function main() {
     } else if (cmd === "help" || cmd === "--help" || cmd === "-h") {
       console.log(`Usage:
   localite [--name <name>]        Deploy current directory
-                                 (Linux: https://<name>.local via nginx/avahi)
-                                 (macOS: https://<name>.test via Laravel Valet)
+                                  (Linux: https://<name>.local via nginx/avahi)
+                                  (macOS: https://<name>.local via nginx/mkcert + /etc/hosts)
   localite undeploy [--name <name>]  Undeploy
   localite list                  List deployments
 `);
