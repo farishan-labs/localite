@@ -384,7 +384,7 @@ function main() {
   let cmd = args[0];
   let rest = args.slice(1);
   if (cmd === "-v" || cmd === "--version") {
-    console.log("localite 0.2.0");
+    console.log("localite 0.2.1");
     process.exit(0);
   }
   if (cmd && cmd.startsWith("-")) {
