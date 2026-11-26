@@ -364,7 +364,11 @@ function list() {
 
 function reload() {
   if (IS_MAC) {
-    run("sudo nginx -s reload", { stdio: "inherit" });
+    try {
+      run("sudo -n nginx -s reload", { stdio: "inherit" });
+    } catch {
+      console.log("Run in terminal: sudo nginx -s reload");
+    }
   } else {
     try {
       run("systemctl --user reload nginx", { stdio: "inherit" });
