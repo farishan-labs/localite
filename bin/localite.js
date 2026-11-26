@@ -365,7 +365,7 @@ function list() {
 function reload() {
   if (IS_MAC) {
     // prompt with a custom title, then feed password to sudo
-    const pw = run(`osascript -e 'display dialog "Reload nginx (administrator password required)" default answer "" with hidden answer' -e 'text returned of result'`).trim();
+    const pw = run(`osascript -e 'display dialog "Reload nginx (administrator password required)" default answer "" with hidden answer with title "localite"' -e 'text returned of result'`).trim();
     run("sudo -S nginx -s reload", { input: pw + "\n", stdio: "pipe" });
   } else {
     try {
