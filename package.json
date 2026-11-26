@@ -1,6 +1,6 @@
 {
   "name": "localite",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Deploy the current directory as a local HTTPS site (*.local).",
   "type": "module",
   "bin": {

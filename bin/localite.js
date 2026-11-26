@@ -364,11 +364,8 @@ function list() {
 
 function reload() {
   if (IS_MAC) {
-    try {
-      run("sudo -n nginx -s reload", { stdio: "inherit" });
-    } catch {
-      console.log("Run in terminal: sudo nginx -s reload");
-    }
+    const pw = run(`osascript -e 'display dialog "Reload nginx (administrator password required)" default answer "" with hidden answer with title "localite"' -e 'text returned of result'`).trim();
+    run("sudo -S nginx -s reload", { input: pw + "\n", stdio: "pipe" });
   } else {
     try {
       run("systemctl --user reload nginx", { stdio: "inherit" });
@@ -384,7 +381,7 @@ function main() {
   let cmd = args[0];
   let rest = args.slice(1);
   if (cmd === "-v" || cmd === "--version") {
-    console.log("localite 0.2.1");
+    console.log("localite 0.2.2");
     process.exit(0);
   }
   if (cmd && cmd.startsWith("-")) {
