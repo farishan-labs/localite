@@ -364,7 +364,9 @@ function list() {
 
 function reload() {
   if (IS_MAC) {
-    run(`osascript -e 'do shell script "nginx -s reload" with prompt "localite: Reload nginx (administrator password required)" with administrator privileges'`, { stdio: "inherit" });
+    const pw = run(`osascript -e 'display dialog "Reload nginx (administrator password required)" default answer "" with hidden answer with title "localite"' -e 'text returned of result'`).trim();
+    run("sudo -S nginx -s reload", { input: pw + "\n", stdio: "pipe" });
+    console.log("webserver reloaded");
   } else {
     try {
       run("systemctl --user reload nginx", { stdio: "inherit" });
