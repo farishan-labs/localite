@@ -364,12 +364,8 @@ function list() {
 
 function reload() {
   if (IS_MAC) {
-    try {
-      run("sudo -n nginx -s reload", { stdio: "inherit" });
-    } catch {
-      // fall back to a macOS password prompt
-      run(`osascript -e 'do shell script "nginx -s reload" with administrator privileges'`, { stdio: "inherit" });
-    }
+    // always prompt for admin password via macOS dialog
+    run(`osascript -e 'do shell script "nginx -s reload" with administrator privileges'`, { stdio: "inherit" });
   } else {
     try {
       run("systemctl --user reload nginx", { stdio: "inherit" });
@@ -385,7 +381,7 @@ function main() {
   let cmd = args[0];
   let rest = args.slice(1);
   if (cmd === "-v" || cmd === "--version") {
-    console.log("localite 0.1.0");
+    console.log("localite 0.2.0");
     process.exit(0);
   }
   if (cmd && cmd.startsWith("-")) {
