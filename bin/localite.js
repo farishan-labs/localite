@@ -384,6 +384,10 @@ function main() {
   const args = process.argv.slice(2);
   let cmd = args[0];
   let rest = args.slice(1);
+  if (cmd === "-v" || cmd === "--version") {
+    console.log("localite 0.1.0");
+    process.exit(0);
+  }
   if (cmd && cmd.startsWith("-")) {
     rest = args; // flags first => deploy
     cmd = null;
