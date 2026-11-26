@@ -364,8 +364,9 @@ function list() {
 
 function reload() {
   if (IS_MAC) {
-    // always prompt for admin password via macOS dialog
-    run(`osascript -e 'do shell script "nginx -s reload" with administrator privileges'`, { stdio: "inherit" });
+    // prompt with a custom title, then feed password to sudo
+    const pw = run(`osascript -e 'display dialog "Reload nginx (administrator password required)" default answer "" with hidden answer' -e 'text returned of result'`).trim();
+    run("sudo -S nginx -s reload", { input: pw + "\n", stdio: "pipe" });
   } else {
     try {
       run("systemctl --user reload nginx", { stdio: "inherit" });
