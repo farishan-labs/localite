@@ -364,7 +364,12 @@ function list() {
 
 function reload() {
   if (IS_MAC) {
-    run("sudo nginx -s reload", { stdio: "inherit" });
+    try {
+      run("sudo -n nginx -s reload", { stdio: "inherit" });
+    } catch {
+      // fall back to a macOS password prompt
+      run(`osascript -e 'do shell script "nginx -s reload" with administrator privileges'`, { stdio: "inherit" });
+    }
   } else {
     try {
       run("systemctl --user reload nginx", { stdio: "inherit" });
