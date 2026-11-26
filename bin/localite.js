@@ -362,6 +362,19 @@ function list() {
   }
 }
 
+function reload() {
+  if (IS_MAC) {
+    run("sudo nginx -s reload", { stdio: "inherit" });
+  } else {
+    try {
+      run("systemctl --user reload nginx", { stdio: "inherit" });
+    } catch {
+      run("sudo nginx -s reload", { stdio: "inherit" });
+    }
+  }
+  console.log("webserver reloaded");
+}
+
 function main() {
   const args = process.argv.slice(2);
   let cmd = args[0];
@@ -382,6 +395,8 @@ function main() {
       undeploy(nameOverride);
     } else if (cmd === "list") {
       list();
+    } else if (cmd === "reload") {
+      reload();
     } else if (cmd === "help" || cmd === "--help" || cmd === "-h") {
       console.log(`Usage:
   localite [--name <name>] [--proxy <port>]   Deploy current directory (or proxy a port)
@@ -389,6 +404,7 @@ function main() {
                                   (macOS: https://<name>.local via nginx/mkcert + /etc/hosts)
   localite undeploy [--name <name>]              Undeploy
   localite list                                  List deployments
+  localite reload                                Reload webserver backend (nginx)
   Examples:
     localite --name me
     localite --name cockpit --proxy 7777
